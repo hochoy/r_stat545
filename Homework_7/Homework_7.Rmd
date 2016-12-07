@@ -1,0 +1,219 @@
+---
+title: "Homework_7"
+author: "David Choy"
+date: "November 14, 2015"
+output: 
+  html_document: 
+    keep_md: yes
+---
+
+# Homework 7
+
+For this homework, we are applying the skills we learned in data wrangling to a real life dataset. These datasets are usually messy and wrought with poorly-formatted values and variables. In our case, we are reading in data from a suvrey about candy choices and other miscellaneous questions. As expected, many participants do input poorly-formatted answers or gibberish as survey answers so it is our task to first clean up the data we are interested in. In my case, I want to look at the candy choices made by participants and their age. 
+
+Homework steps available [here](https://stat545-ubc.github.io/hw07_data-wrangling-candy.html)
+
+###1. Load the libraries
+The first step to any R studio analysis is to load the required libraries
+
+```{r}
+library(readr)
+suppressPackageStartupMessages(library(dplyr))
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+```
+
+###2. Read in the candy survey data
+Our next step is to then read in the candy survey data which is in a .csv form. We will use read_csv() from the readr package as it allows us to use the argument col_types=cols(). This argument allows us to parse through the data to find the date and time values in a particular format. I then use glimpse() on the data to look at the types of variables available. I can already see some problems with the format of the data.
+
+1.  the candy names are surrounded by square brackets which will make data sorting and subsetting harder later
+2.  age (How old are you?) is not numeric. Being numeric allows for better data wielding for plotting and calculation
+3.  using View(raw), I can see that some of the later responses are free field texts where the values are extremely non-standardized
+
+```{r}
+work_filepath <- "lecture_data/CANDY-HIERARCHY-2015 SURVEY-Responses.csv"
+home_filepath <- "lecture_data/CANDY-HIERARCHY-2015 SURVEY-Responses.csv"
+
+if (file.exists(work_filepath)) {
+  candy_path <- work_filepath;
+} else candy_path <- home_filepath;
+raw <- read_csv(candy_path,col_types = cols(Timestamp = col_datetime("%m/%d/%Y %H:%M:%S")))
+raw %>% glimpse()
+```
+
+###3. Creating an ID variable
+We know that the data is messy and so, we will have to do some transformation and trimming. Before making any changes to the data, we will give each row (observation) an ID so that we don't lose track of whose data is whose when we do recombine dataframes/data. To create and ID variable, I have borrowed Jenny's sprintf() and corresponding arguments. Sprintf() returns a character vector of strings that is made up of formatted strings. In this case, the format is "ID%04". "ID" will literally write out "ID" while "%04" refers to a padding of up to 4 zeroes. "d" refers to digit which is decided by row_number() in our case.
+
+```{r}
+raw_with_id <- raw %>%                        # sprintf() -> returns a character vector of strings  
+  mutate(id = sprintf("ID%04d", row_number()))# %04 means -> pad the digit up to 4 zeroes e.g. ID4 -> ID0004
+
+raw_with_id2 <- raw_with_id %>%                
+  select(id,                                  # rename age and trick_or_treat
+         age = starts_with("How"),            # starts_with() pulls out strings that start with the target string
+         trick_treat = starts_with("Are you going"),
+         everything()) %>% select(-Timestamp)
+knitr::kable(raw_with_id2 %>% .[1:5,1:7],format = 'markdown')
+length(raw_with_id2)
+```
+
+###4. Cleaning up age values and candy names
+With the ID created for each observation, we can trim and transform our values while making sure we are tracking the observation IDs. For cleaning, I will focus on cleaning 'age' and candy names as they are the only variables I am interested in.
+
+####A. Cleaning age
+For age, we want:  
+
+*  To see if age is reasonable (5-100) and in the correct format(a number). 
+*  To remove all non-number entries, I use as.integer() to coerce the character strings into integers.
+    *  If the entries are numbers in character form such as "1", "15", 124.12", they will be co-erced into proper integers. 
+    *  However, if the entries are words or gibberish such as "one", "potato", "4$Y)()", then it should return NAs which I will filter out
+
+```{r results = "hold", warning = FALSE}
+as.integer(c("1","15","124.12"))      #as.integer() converts numbers to integers
+as.integer(c("one","potato","4$Y)(")) #non-numbers are converted into NAs
+```
+```{r results = "hold", warning = FALSE}
+raw_clean_age <- raw_with_id2 %>% 
+                 mutate(age = as.integer(age))          #converting nums to integers, non-nums to NAs
+raw_clean_age <- raw_clean_age %>%                      #filter for age(5-100)
+                 filter(!is.na(age)) %>% 
+                 filter(age < 100) %>% 
+                 filter(age > 5) 
+raw_clean_age %>% ggplot(aes(x=age)) + 
+                geom_histogram(stat="bin",binwidth=5) +  #plot the histogram for age
+                ggtitle("Histogram of participants' ages")
+raw_clean_age$age %>% median()              
+```
+
+From this plot, we can see that age is in a relatively reasonable range and centered around a median of 35 years old. 
+
+####B. Cleaning candy names
+For candy names, I used Jenny's regex code to extract only the column names which had a surrounding [ ] bracket. These are the candy names. The brackets are removed and then the new column names replace the old candy names.
+
+```{r}
+candy_oldnew_names <-
+  data_frame(orig_name = names(raw_clean_age)) %>%                         #create new dataframe
+  mutate(is_candy = str_detect(orig_name,"^\\["),                          #find srring starting with [
+         new_name = str_replace_all(orig_name, "(^\\[)(.*)(\\]$)", "\\2"), #replace oldnames with the 2nd group
+         new_name = str_replace_all(new_name, '["’]', "'"),                #replace all " or ' with '
+         is_changed = orig_name != new_name)
+knitr::kable(candy_oldnew_names %>% head(10),format = 'markdown')
+```
+
+Using this set of bracket-less candy names, we replace the old candy names with the new candy names.
+
+```{r}
+names(raw_clean_age) <- candy_oldnew_names$new_name     # replace candy names
+knitr::kable(raw_clean_age %>% head(10) %>% .[1:6],format = 'markdown')
+```
+
+The candy names are now bracket-less!
+
+###5. Reshaping of the candy variable
+Now that we have cleaned up age and candy names, we can begin reshaping the data. For this purpose, I am going to use gather() from the tidyr package. Since gather() restructures the data based on the columns selected, I want to first make sure to exclude any unnecessary columns by selecting only "id","age","trick_or_treat" and all of the candy variables in candy_names.
+
+####A. Selecting id,age,trick_or_treat and candy_names
+As we can see below:
+
+1.  selecting id,age,trick_or_treat is a breeze. 
+2.  However, selecting only the candies in the next 100+ columns is difficult. Luckily, we already have a list of candy names to use from before (candy_names)
+
+```{r}
+candy_names <- candy_oldnew_names %>% filter(is_candy) %>% .[["new_name"]];   #get a vector of candy names
+candy_ready <- raw_clean_age %>% select(one_of(c("id",           # select id
+                                                 "age",          # select age
+                                                 "trick_treat",  # select t_o_t
+                                                 candy_names)))  # select all columns that match each of the candy_names
+knitr::kable(candy_ready %>% head(10) %>% .[1:6],format = 'markdown')
+```
+
+####B. Reshaping the candy variables using gather()
+Instead of having the candy variables separate, gathering them into 1 column would allow us to use more dplyr. I also want to select the top ten most popular candies. For this purpose, I will use gather() to create a key:value pair. I also set the columns I want to gather using the final argument "4:length(candy_ready)" which selects all the candy name columns. I then count the number of joy, despair and NA responses for each candy
+
+```{r}
+candy_gathered <- gather(candy_ready,"candynames","review",4:length(candy_ready))  #reshape all the candy columns into key:value pairs
+candy_counts <- candy_gathered %>% group_by(candynames,review) %>% summarize(count = n())  # count joy,despair,NA
+knitr::kable(candy_counts %>% head(10),format='markdown')
+```
+
+####C. Creating a new column called "popularity" to represent both joy and despair
+Because joy, despair and NA are non-numerics, it is slightly harder to apply numerical comparisons. So, I will be creating a new value called popularity that measures the popularity of a candy by dividing the number of Joy responses by the total response (joy + despair + NA). Below, I have subsetted the counts for joy, despair and NA values for each candy. Then, I recombined the 3 counts into a new dataframe called candy_counts_split. Having the 3 counts as 3 separate variables enables me to make my popularity calculation.
+
+```{r}
+joy_df <- candy_counts %>% ungroup() %>% filter(review == "JOY");names(joy_df)[3] <- "joy_count"
+despair_df <- candy_counts %>% filter(review == "DESPAIR");names(despair_df)[3] <- "despair_count"
+na_df <- candy_counts %>% filter(is.na(review)); names(na_df)[3] <- "na_count"
+
+candy_counts_split <- cbind(subset(joy_df,select = -c(review)),
+                            despair_count = despair_df$despair_count,
+                            na_count = na_df$na_count)
+candy_counts_popular <- candy_counts_split %>% mutate(popularity = 100 * joy_count/(joy_count+despair_count+na_count))
+knitr::kable(candy_counts_popular[-3,] %>% head(),format='markdown')
+```
+
+####D. Adding additional candy info
+Lets add additional info (candy type & manufacturer) to our candies. I got this information this manually using google search and excel as it was only 95 variables. Not practical for larger datasets and tiresome. But I wanted to see what I could find when I combined this information with the candy counts. 
+
+```{r}
+candy_manufacture_type <- read_csv("candy-manu-type.csv")    #read in candy info  
+candy_counts_complete <- merge(candy_manufacture_type,       #merge candy info with candy counts
+                               candy_counts_popular,
+                               by.x="candynames")            #merge using the "candynames" column as a shared column
+candy_counts_top_20 <- candy_counts_complete %>% arrange(-popularity) %>% head(20)  #show only the top 20 candies
+knitr::kable(candy_counts_top_20, format='markdown')
+```
+
+Above, I sorted the candies by highest popularity. There is still a lot of hidden trends however so I decided to make a plot. Below I made a function for plotting. The reason for using a function instead of just plotting is because I was testing various options for fill= and facet_grid(formula=).
+
+```{r}
+plot_candy <- function(df,
+                       filler = "type",
+                       facet_split = "type",
+                       envir=environment()) {
+  plot1 <- df %>% 
+    mutate(candynames = reorder(candynames,-popularity)) %>%  
+    ggplot(aes_string(x="candynames", y = "popularity", fill = filler)) + 
+    geom_bar(stat="identity") +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0, hjust=0.5,size = 10, color = "black")) +
+    facet_grid(as.formula(paste(facet_split," ~ ."))) +
+    ggtitle("Top 20 most popular candies by type and manufacturer")
+  plot1$plot_env <- envir
+  plot1
+}
+plot_candy(candy_counts_top_20,filler = "manufacturer")
+```
+
+In the plot above, we can see that chocolate is the most popular candy, followed by cash and then sweets. Now, of course, cash isn't a real candy but for the purpose of this exercise, I left it in. To remove it, I can just use filter(type != danger) on the dataset to remove it. In this plot, I also notice that there are 8 main manufacturers of candy in the top 20 list. I am interested to see which company dominates in the top 20 so I make a table.
+
+```{r}
+manufacture_popularity_top_20 <- candy_counts_top_20 %>% 
+  group_by(manufacturer) %>%                     # group the results by manufacturer
+  summarize(manufacturer_popularity = n()) %>%   # count the number of observations (candies) for each manufacturer
+  arrange(-manufacturer_popularity)              # arrange in descending order of popularity
+knitr::kable(manufacture_popularity_top_20,format = 'markdown')
+```
+
+From this table it is apparent that there are 8 manufacturers on this list, the most common of which is Mars Inc. However, while this suggests that Mars Inc candies are the most popular among the top 20 candies, do Mars Inc. products generate the best reviews overall (all candies)?
+
+```{r}
+manufacture_popularity_all_top_10 <- candy_counts_complete %>% 
+  group_by(manufacturer) %>%          # group results for each manufacturer
+  summarize(mean_popularity = mean(popularity)) %>%   # summarize using mean()
+  arrange(-mean_popularity) %>%       # arrange in descending order or popularity
+  mutate(manufacturer = reorder(manufacturer,-mean_popularity)) %>% head(10)
+knitr::kable(manufacture_popularity_all_top_10,format='markdown')
+
+manufacturer_plot_top_10 <- manufacture_popularity_all_top_10 %>% 
+  ggplot(aes(x=manufacturer,y=mean_popularity, fill = manufacturer)) + 
+  geom_bar(stat="identity") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0, hjust=0.5,size = 10, color = "black")) +
+  ggtitle("Top 10 popular candy manufacturers")
+manufacturer_plot_top_10 
+```
+
+According to the table and plot, on average, Reese candy products have the highest average popularity. This is interesting because Mars Inc. was the most commong manufacturer for the top 20 producst but Reese led in popularity overall. This demonstrates a disrepancy between sampling from the top 20% (20/95 candies) and sampling from the full population (95/95 candies). If these numbers represent sales, then we can say that although Mars Inc. products are super popular (always listed in top 20), it is the Reese products that ultimately sell more. That would require more data to prove.
+
+Done! Thanks!
