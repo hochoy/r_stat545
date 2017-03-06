@@ -1,6 +1,6 @@
 # README for homework 11
 
-Hi, my homework 11 is [here](https://wai-ho-choy.shinyapps.io/new_app). 
+Hi, my homework 11 is [here](https://wai-ho-choy.shinyapps.io/new_app). **NOTE: It will take 5-10 seconds to load the graph on the first try as Shiny has to wake up**
 
 The ui.R and server.R files are stored within my new_app folder while the combined app.R file is out here. For this homework, I have used the code I learned in the lecture and added a few of the recommended additions.
 
