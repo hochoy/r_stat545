@@ -13,3 +13,4 @@ Hi, due to problems with embedding a git repo inside another git repo, I have in
 The instruction for installing and reviewing a peer's package is below
 
 [guide_link](https://stat545-ubc.github.io/hw08_package_onramp-peer-review.html)
+[updated_2017_link](http://stat545.com/hw09_package.html)
